@@ -1,6 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include "mpi.h"
+
+#define MASTER 0
+
+int taskid,        /* task ID - also used as seed number */
+    numtasks,      /* number of tasks */
+    rc; 
 
 double c_x_min;
 double c_x_max;
@@ -14,10 +21,17 @@ int iteration_max = 200;
 
 int image_size;
 unsigned char **image_buffer;
+int * iterations;
+int * all_iterations;
 
 int i_x_max;
 int i_y_max;
 int image_buffer_size;
+
+int i_start_y;
+int i_end_y;
+
+int sub_image_buffer_size;
 
 int gradient_size = 16;
 int colors[17][3] = {
@@ -42,11 +56,16 @@ int colors[17][3] = {
 
 void allocate_image_buffer(){
     int rgb_size = 3;
-    image_buffer = (unsigned char **) malloc(sizeof(unsigned char *) * image_buffer_size);
+    if (taskid == 0){
+        image_buffer = (unsigned char **) malloc(sizeof(unsigned char *) * image_buffer_size);
 
-    for(int i = 0; i < image_buffer_size; i++){
-        image_buffer[i] = (unsigned char *) malloc(sizeof(unsigned char) * rgb_size);
-    };
+        for(int i = 0; i < image_buffer_size; i++){
+            image_buffer[i] = (unsigned char *) malloc(sizeof(unsigned char) * rgb_size);
+        };
+        all_iterations = (int *) malloc(sizeof (int) * image_buffer_size);
+    }
+
+    iterations = (int *) malloc (sizeof (int ) * sub_image_buffer_size);
 };
 
 void init(int argc, char *argv[]){
@@ -69,9 +88,14 @@ void init(int argc, char *argv[]){
         i_x_max           = image_size;
         i_y_max           = image_size;
         image_buffer_size = image_size * image_size;
+        sub_image_buffer_size = image_buffer_size / numtasks;
+
+        i_start_y = taskid * image_size / numtasks;
+        i_end_y = (taskid + 1) * image_size / numtasks;
 
         pixel_width       = (c_x_max - c_x_min) / i_x_max;
         pixel_height      = (c_y_max - c_y_min) / i_y_max;
+        
     };
 };
 
@@ -94,7 +118,7 @@ void update_rgb_buffer(int iteration, int x, int y){
 
 void write_to_file(){
     FILE * file;
-    char * filename               = "output.ppm";
+    char * filename               = "outputmpi.ppm";
     char * comment                = "# ";
 
     int max_color_component_value = 255;
@@ -121,11 +145,12 @@ void compute_mandelbrot(){
     int iteration;
     int i_x;
     int i_y;
+    int count = 0;
 
     double c_x;
     double c_y;
 
-    for(i_y = 0; i_y < i_y_max; i_y++){
+    for(i_y = i_start_y; i_y < i_end_y; i_y++){
         c_y = c_y_min + i_y * pixel_height;
 
         if(fabs(c_y) < pixel_height / 2){
@@ -151,24 +176,51 @@ void compute_mandelbrot(){
                 z_x_squared = z_x * z_x;
                 z_y_squared = z_y * z_y;
             };
-
-            update_rgb_buffer(iteration, i_x, i_y);
+            iterations[count] = iteration;
+            count++;
         };
     };
 };
 
 int main(int argc, char *argv[]){
+    int count = 0;
+    MPI_Init(&argc,&argv);
+    MPI_Comm_size(MPI_COMM_WORLD,&numtasks);
+    MPI_Comm_rank(MPI_COMM_WORLD,&taskid);
+
     init(argc, argv);
 
     allocate_image_buffer();
 
     compute_mandelbrot();
 
-    write_to_file();
+    MPI_Gather(iterations, sub_image_buffer_size, MPI_INT, all_iterations, sub_image_buffer_size, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-    for(int i = 0; i < image_buffer_size; i++)
-        free(image_buffer[i]);
-    free(image_buffer);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    if (taskid == 0){
+
+        for (int y = 0; y < i_y_max; y++)
+            for (int x = 0; x < i_x_max; x++){
+                update_rgb_buffer(all_iterations[count], x, y);
+                count++;
+            }
+        write_to_file();
+    }
+
+    MPI_Finalize();
+    free(iterations);
+
+    if (taskid == 0){
+
+        for(int i = 0; i < image_buffer_size; i++){
+            free(image_buffer[i]);
+        };
+        free(image_buffer);
+        free(all_iterations);
+    }
+
+
 
     return 0;
 };
