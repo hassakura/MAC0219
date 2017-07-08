@@ -14,7 +14,7 @@ $(OUTPUT)_seq: $(OUTPUT)_seq.c
 	$(CC) -o $(OUTPUT)_seq $(CC_OPT) $(OUTPUT)_seq.c
 
 $(OUTPUT)_mpi: $(OUTPUT)_mpi.c
-	$(MCC) -o $(OUTPUT)_mpi $(OUTPUT)_mpi.c
+	$(MCC) -o $(OUTPUT)_mpi $(CC_OPT) $(OUTPUT)_mpi.c
 
 .PHONY: clean
 clean:
